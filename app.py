@@ -67,9 +67,216 @@ if 'processed_view' not in st.session_state:
     st.session_state.processed_view = None
 if 'editor_mode' not in st.session_state:
     st.session_state.editor_mode = "delete"  # "delete", "paint" ou "new_particle"
+if 'calibrated_pixel_size' not in st.session_state:
+    st.session_state.calibrated_pixel_size = None
+if 'show_visual_calibration' not in st.session_state:
+    st.session_state.show_visual_calibration = False
 
 st.title("🔬 Análise de Nióbio: Ajuste Fino & Editor Visual")
 st.markdown("---")
+
+# --- FUNÇÕES AUXILIARES (devem vir ANTES do código da sidebar) ---
+def read_hdr_file(hdr_path):
+    """
+    Lê arquivo .hdr e extrai informações de calibração.
+    
+    Returns:
+        dict: Dicionário com informações extraídas (PixelSize em µm, etc)
+    """
+    hdr_info = {}
+    
+    try:
+        with open(hdr_path, 'r', encoding='utf-8', errors='ignore') as f:
+            content = f.read()
+            
+            # Procurar por PixelSize (pode estar em diferentes formatos)
+            import re
+            
+            # Padrão 1: PixelSize = valor
+            pattern1 = r'PixelSize\s*=\s*([\d.eE+-]+)'
+            match1 = re.search(pattern1, content, re.IGNORECASE)
+            
+            # Padrão 2: Pixel Width ou Width
+            pattern2 = r'(?:Pixel)?Width\s*=\s*([\d.eE+-]+)'
+            match2 = re.search(pattern2, content, re.IGNORECASE)
+            
+            # Padrão 3: Qualquer linha com "pixel" e número científico
+            pattern3 = r'pixel[^=]*=\s*([\d.eE+-]+)'
+            match3 = re.search(pattern3, content, re.IGNORECASE)
+            
+            pixel_size_meters = None
+            
+            if match1:
+                pixel_size_meters = float(match1.group(1))
+                hdr_info['source'] = 'PixelSize'
+            elif match2:
+                pixel_size_meters = float(match2.group(1))
+                hdr_info['source'] = 'Width'
+            elif match3:
+                pixel_size_meters = float(match3.group(1))
+                hdr_info['source'] = 'Generic pixel field'
+            
+            if pixel_size_meters:
+                # Converter de metros para micrômetros
+                pixel_size_um = pixel_size_meters * 1e6
+                
+                hdr_info['pixel_size_meters'] = pixel_size_meters
+                hdr_info['pixel_size_um'] = pixel_size_um
+                hdr_info['success'] = True
+                
+                # Calcular informações adicionais
+                # Quantos pixels para 10 µm?
+                if pixel_size_um > 0:
+                    pixels_for_10um = 10.0 / pixel_size_um
+                    hdr_info['pixels_for_10um'] = pixels_for_10um
+            else:
+                hdr_info['success'] = False
+                hdr_info['error'] = 'PixelSize não encontrado no arquivo'
+            
+            # Tentar extrair outras informações úteis
+            # Magnificação
+            mag_pattern = r'(?:Mag|Magnification)\s*=\s*([\d.]+)'
+            mag_match = re.search(mag_pattern, content, re.IGNORECASE)
+            if mag_match:
+                hdr_info['magnification'] = float(mag_match.group(1))
+            
+            # Voltagem
+            voltage_pattern = r'(?:HV|Voltage|kV)\s*=\s*([\d.]+)'
+            voltage_match = re.search(voltage_pattern, content, re.IGNORECASE)
+            if voltage_match:
+                hdr_info['voltage_kv'] = float(voltage_match.group(1))
+            
+    except FileNotFoundError:
+        hdr_info['success'] = False
+        hdr_info['error'] = 'Arquivo .hdr não encontrado'
+    except Exception as e:
+        hdr_info['success'] = False
+        hdr_info['error'] = f'Erro ao ler arquivo: {str(e)}'
+    
+    return hdr_info
+
+def calibrate_scale_interactive(image):
+    """
+    Permite calibração interativa da escala desenhando uma linha na imagem.
+    
+    Args:
+        image: Imagem numpy array para calibração
+    
+    Returns:
+        dict: {'success': bool, 'pixel_size_um': float, 'line_length_px': float, 'real_length_um': float}
+    """
+    st.markdown("### 📏 Calibração Visual Interativa")
+    st.info("✏️ **Instruções:** Desenhe uma linha sobre a barra de escala da imagem e informe o tamanho real.")
+    
+    # Preparar imagem para o canvas
+    if image.ndim == 2:  # Imagem em escala de cinza
+        img_display = cv2.cvtColor(to_8bit_display(image), cv2.COLOR_GRAY2RGB)
+    else:
+        img_display = to_8bit_display(image)
+    
+    img_pil = Image.fromarray(img_display)
+    
+    # Configurar canvas
+    canvas_height = min(600, image.shape[0])
+    canvas_width = int(image.shape[1] * (canvas_height / image.shape[0]))
+    
+    col_canvas, col_inputs = st.columns([2, 1])
+    
+    with col_canvas:
+        st.markdown("**Desenhe uma linha sobre a barra de escala:**")
+        
+        # Canvas para desenhar a linha
+        canvas_result = st_canvas(
+            fill_color="rgba(255, 0, 0, 0.0)",  # Transparente
+            stroke_width=3,
+            stroke_color="#00FF00",  # Verde brilhante
+            background_image=img_pil,
+            update_streamlit=True,
+            height=canvas_height,
+            width=canvas_width,
+            drawing_mode="line",  # Modo linha
+            key="calibration_canvas",
+        )
+    
+    with col_inputs:
+        st.markdown("**Informações da escala:**")
+        
+        # Seletor de unidade
+        unit = st.selectbox(
+            "Unidade de medida",
+            options=["µm (micrômetros)", "nm (nanômetros)", "mm (milímetros)"],
+            index=0
+        )
+        
+        # Valor da escala
+        scale_value = st.number_input(
+            "Tamanho da linha desenhada",
+            min_value=0.0001,
+            value=10.0,
+            step=0.1,
+            format="%.4f",
+            help="Informe o tamanho real da linha que você desenhou"
+        )
+        
+        # Botão de calibração
+        if st.button("🎯 Calcular Calibração", type="primary", use_container_width=True):
+            if canvas_result.json_data is not None and len(canvas_result.json_data["objects"]) > 0:
+                # Pegar a última linha desenhada
+                line_data = canvas_result.json_data["objects"][-1]
+                
+                if line_data["type"] == "line":
+                    # Extrair coordenadas da linha
+                    x1 = line_data["left"]
+                    y1 = line_data["top"]
+                    x2 = line_data["left"] + line_data["width"]
+                    y2 = line_data["top"] + line_data["height"]
+                    
+                    # Calcular comprimento em pixels (ajustar pela escala do canvas)
+                    scale_factor = image.shape[1] / canvas_width
+                    
+                    line_length_px = np.sqrt((x2 - x1)**2 + (y2 - y1)**2) * scale_factor
+                    
+                    if line_length_px < 1:
+                        st.error("❌ Linha muito pequena! Desenhe uma linha maior.")
+                        return {'success': False}
+                    
+                    # Converter para micrômetros
+                    if "nm" in unit:
+                        real_length_um = scale_value / 1000.0  # nm -> µm
+                    elif "mm" in unit:
+                        real_length_um = scale_value * 1000.0  # mm -> µm
+                    else:  # µm
+                        real_length_um = scale_value
+                    
+                    # Calcular tamanho do pixel
+                    pixel_size_um = real_length_um / line_length_px
+                    
+                    # Mostrar resultados
+                    st.success("✅ Calibração calculada!")
+                    st.metric("Tamanho do pixel", f"{pixel_size_um:.6f} µm/pixel")
+                    st.metric("Linha desenhada", f"{line_length_px:.1f} pixels")
+                    st.metric("Tamanho real", f"{real_length_um:.3f} µm")
+                    
+                    # Calcular pixels para 10 µm
+                    pixels_for_10um = 10.0 / pixel_size_um
+                    st.caption(f"📊 {pixels_for_10um:.1f} pixels = 10 µm")
+                    
+                    return {
+                        'success': True,
+                        'pixel_size_um': pixel_size_um,
+                        'line_length_px': line_length_px,
+                        'real_length_um': real_length_um,
+                        'unit': unit,
+                        'scale_value': scale_value
+                    }
+                else:
+                    st.warning("⚠️ Por favor, use o modo 'linha' para desenhar.")
+                    return {'success': False}
+            else:
+                st.warning("⚠️ Desenhe uma linha sobre a barra de escala primeiro!")
+                return {'success': False}
+    
+    return {'success': False}
 
 # --- BARRA LATERAL ---
 with st.sidebar:
@@ -90,7 +297,85 @@ with st.sidebar:
     
     st.markdown("---")
     st.subheader("Parâmetros do Modelo")
-    microns_per_pixel = st.number_input("µm / Pixel", value=0.05, format="%.4f")
+    
+    # Seção de calibração de escala
+    st.markdown("**📏 Calibração de Escala**")
+    
+    # Upload de arquivo .hdr
+    hdr_file = st.file_uploader("Upload arquivo .hdr (opcional)", type=["hdr"], key="hdr_uploader")
+    
+    if hdr_file is not None:
+        if st.button("🔍 Ler Calibração do .hdr", use_container_width=True):
+            # Salvar temporariamente o arquivo
+            import tempfile
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.hdr') as tmp_file:
+                tmp_file.write(hdr_file.getvalue())
+                tmp_path = tmp_file.name
+            
+            # Ler informações do .hdr
+            hdr_info = read_hdr_file(tmp_path)
+            
+            # Limpar arquivo temporário
+            import os
+            os.unlink(tmp_path)
+            
+            if hdr_info.get('success'):
+                st.success("✅ Calibração extraída com sucesso!")
+                
+                # Mostrar informações
+                st.info(f"""
+**Informações Extraídas:**
+- **PixelSize**: {hdr_info['pixel_size_meters']:.4e} m
+- **PixelSize**: {hdr_info['pixel_size_um']:.6f} µm/pixel
+- **Fonte**: {hdr_info['source']}
+- **Pixels para 10 µm**: {hdr_info.get('pixels_for_10um', 0):.1f} pixels
+                """)
+                
+                # Mostrar informações adicionais se disponíveis
+                if 'magnification' in hdr_info:
+                    st.caption(f"Magnificação: {hdr_info['magnification']:.0f}x")
+                if 'voltage_kv' in hdr_info:
+                    st.caption(f"Voltagem: {hdr_info['voltage_kv']:.1f} kV")
+                
+                # Armazenar no session_state para usar no campo abaixo
+                st.session_state.calibrated_pixel_size = hdr_info['pixel_size_um']
+                st.rerun()
+            else:
+                st.error(f"❌ Erro: {hdr_info.get('error', 'Erro desconhecido')}")
+                st.warning("💡 Dica: Verifique se o arquivo contém o campo 'PixelSize'")
+    
+    # Opção de calibração visual
+    st.markdown("---")
+    st.markdown("**📐 Calibração Visual (Manual)**")
+    
+    if st.button("🖊️ Calibrar Desenhando na Imagem", use_container_width=True):
+        st.session_state.show_visual_calibration = True
+    
+    # Campo de entrada manual (com valor calibrado se disponível)
+    # CORREÇÃO: Garantir que sempre temos um valor float válido
+    default_value = st.session_state.get('calibrated_pixel_size')
+    if default_value is None or not isinstance(default_value, (int, float)):
+        default_value = 0.05
+    
+    microns_per_pixel = st.number_input(
+        "µm / Pixel", 
+        value=float(default_value), 
+        format="%.6f",
+        min_value=0.000001,
+        help="Tamanho de um pixel em micrômetros. Use o botão acima para ler do arquivo .hdr"
+    )
+    
+    # CORREÇÃO: Garantir que microns_per_pixel nunca seja None
+    if microns_per_pixel is None:
+        microns_per_pixel = 0.05
+    
+    # Mostrar conversão útil
+    if microns_per_pixel > 0:
+        pixels_for_10um = 10.0 / microns_per_pixel
+        st.caption(f"📊 {pixels_for_10um:.1f} pixels = 10 µm")
+    
+    st.markdown("---")
+    st.markdown("**🔬 Parâmetros do Cellpose**")
     flow_threshold = st.number_input("Flow Thresh", value=1.0)
     cellprob_threshold = st.number_input("Cellprob Thresh", value=-50.0)
     min_size_px = st.number_input("Tam. Mínimo (px)", value=10)
@@ -104,7 +389,7 @@ with st.sidebar:
         st.session_state.editor_mode = "delete"
         st.rerun()
 
-# --- FUNÇÕES ---
+# --- OUTRAS FUNÇÕES ---
 @st.cache_resource
 def load_model():
     use_gpu = torch.cuda.is_available()
@@ -469,6 +754,34 @@ if uploaded_file:
                 caption="Original RAW", use_container_width=True, clamp=True)
         c2.image(img_input, caption="Pré-processada + Fundo Falso",
                 use_container_width=True, clamp=True)
+    
+    # --- CALIBRAÇÃO VISUAL ---
+    if st.session_state.show_visual_calibration:
+        st.markdown("---")
+        calibration_result = calibrate_scale_interactive(st.session_state.original_raw)
+        
+        if calibration_result.get('success'):
+            # Botão para aplicar a calibração
+            col_apply, col_cancel = st.columns(2)
+            
+            with col_apply:
+                if st.button("✅ Aplicar esta Calibração", type="primary", use_container_width=True):
+                    st.session_state.calibrated_pixel_size = calibration_result['pixel_size_um']
+                    st.session_state.show_visual_calibration = False
+                    st.success(f"✅ Calibração aplicada: {calibration_result['pixel_size_um']:.6f} µm/pixel")
+                    st.rerun()
+            
+            with col_cancel:
+                if st.button("❌ Cancelar", use_container_width=True):
+                    st.session_state.show_visual_calibration = False
+                    st.rerun()
+        
+        # Botão para fechar a calibração
+        if st.button("🔙 Voltar sem Calibrar"):
+            st.session_state.show_visual_calibration = False
+            st.rerun()
+        
+        st.markdown("---")
     
     # --- EXECUÇÃO ---
     if run_btn:
