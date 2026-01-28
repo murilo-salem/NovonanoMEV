@@ -197,13 +197,13 @@ def create_detailed_overlay(masks, img_norm, df_filtered):
     return overlay_rgb
 
 def create_dashboard(df_filtered, img_shape, microns_per_pixel):
-    """Cria dashboard com 6 gráficos estatísticos."""
+    """Cria dashboard com 6 gráficos estatísticos e retorna figuras individuais."""
     if len(df_filtered) == 0:
         fig, ax = plt.subplots(figsize=(10, 6))
         ax.text(0.5, 0.5, 'Nenhuma partícula detectada',
                 ha='center', va='center', fontsize=16)
         ax.axis('off')
-        return fig
+        return fig, {}
     
     # Limpar dados inválidos (NaN, inf)
     df_clean = df_filtered.copy()
@@ -215,7 +215,10 @@ def create_dashboard(df_filtered, img_shape, microns_per_pixel):
         ax.text(0.5, 0.5, 'Dados inválidos após limpeza',
                 ha='center', va='center', fontsize=16)
         ax.axis('off')
-        return fig
+        return fig, {}
+    
+    # Dicionário para armazenar figuras individuais
+    individual_figs = {}
     
     fig = plt.figure(figsize=(16, 10))
     gs = fig.add_gridspec(2, 3, hspace=0.3, wspace=0.3)
@@ -235,6 +238,23 @@ def create_dashboard(df_filtered, img_shape, microns_per_pixel):
     ax1.legend(fontsize=8)
     ax1.grid(True, alpha=0.3)
     
+    # Criar figura individual do histograma
+    fig1_individual = plt.figure(figsize=(8, 6))
+    ax1_ind = fig1_individual.add_subplot(111)
+    ax1_ind.hist(df_clean['area_um2'], bins=n_bins,
+            edgecolor='black', alpha=0.7, color='steelblue')
+    ax1_ind.axvline(df_clean['area_um2'].mean(), color='red', linestyle='--',
+               label=f'Média: {df_clean["area_um2"].mean():.2f} µm²')
+    ax1_ind.axvline(df_clean['area_um2'].median(), color='green', linestyle=':',
+               label=f'Mediana: {df_clean["area_um2"].median():.2f} µm²')
+    ax1_ind.set_xlabel('Área (µm²)', fontsize=12)
+    ax1_ind.set_ylabel('Frequência', fontsize=12)
+    ax1_ind.set_title('DISTRIBUIÇÃO DE TAMANHOS', fontsize=14, fontweight='bold')
+    ax1_ind.legend(fontsize=10)
+    ax1_ind.grid(True, alpha=0.3)
+    plt.tight_layout()
+    individual_figs['histograma'] = fig1_individual
+    
     # 2. Circularidade vs Área
     ax2 = fig.add_subplot(gs[0, 1])
     scatter = ax2.scatter(df_clean['area_um2'], df_clean['circularity'],
@@ -248,6 +268,23 @@ def create_dashboard(df_filtered, img_shape, microns_per_pixel):
     ax2.grid(True, alpha=0.3)
     ax2.axhline(y=0.7, color='green', linestyle='--', alpha=0.5, linewidth=1)
     ax2.axhline(y=0.3, color='orange', linestyle='--', alpha=0.5, linewidth=1)
+    
+    # Criar figura individual
+    fig2_individual = plt.figure(figsize=(8, 6))
+    ax2_ind = fig2_individual.add_subplot(111)
+    scatter_ind = ax2_ind.scatter(df_clean['area_um2'], df_clean['circularity'],
+                         c=df_clean['aspect_ratio'], cmap='viridis',
+                         alpha=0.7, s=80, edgecolors='black', linewidth=0.5)
+    ax2_ind.set_xlabel('Área (µm²)', fontsize=12)
+    ax2_ind.set_ylabel('Circularidade', fontsize=12)
+    ax2_ind.set_title('CIRCULARIDADE vs ÁREA', fontsize=14, fontweight='bold')
+    cbar_ind = plt.colorbar(scatter_ind, ax=ax2_ind)
+    cbar_ind.set_label('Razão de Aspecto', fontsize=11)
+    ax2_ind.grid(True, alpha=0.3)
+    ax2_ind.axhline(y=0.7, color='green', linestyle='--', alpha=0.5, linewidth=1)
+    ax2_ind.axhline(y=0.3, color='orange', linestyle='--', alpha=0.5, linewidth=1)
+    plt.tight_layout()
+    individual_figs['circularidade_area'] = fig2_individual
     
     # 3. Forma vs Tamanho
     ax3 = fig.add_subplot(gs[0, 2])
@@ -263,6 +300,23 @@ def create_dashboard(df_filtered, img_shape, microns_per_pixel):
     ax3.axhline(y=1.0, color='blue', linestyle='--', alpha=0.5, linewidth=1)
     ax3.axhline(y=2.0, color='red', linestyle='--', alpha=0.5, linewidth=1)
     
+    # Criar figura individual
+    fig3_individual = plt.figure(figsize=(8, 6))
+    ax3_ind = fig3_individual.add_subplot(111)
+    scatter2_ind = ax3_ind.scatter(df_clean['diameter_um'], df_clean['aspect_ratio'],
+                          c=df_clean['circularity'], cmap='plasma',
+                          alpha=0.7, s=80, edgecolors='black', linewidth=0.5)
+    ax3_ind.set_xlabel('Diâmetro (µm)', fontsize=12)
+    ax3_ind.set_ylabel('Razão de Aspecto', fontsize=12)
+    ax3_ind.set_title('FORMA vs TAMANHO', fontsize=14, fontweight='bold')
+    cbar2_ind = plt.colorbar(scatter2_ind, ax=ax3_ind)
+    cbar2_ind.set_label('Circularidade', fontsize=11)
+    ax3_ind.grid(True, alpha=0.3)
+    ax3_ind.axhline(y=1.0, color='blue', linestyle='--', alpha=0.5, linewidth=1)
+    ax3_ind.axhline(y=2.0, color='red', linestyle='--', alpha=0.5, linewidth=1)
+    plt.tight_layout()
+    individual_figs['forma_tamanho'] = fig3_individual
+    
     # 4. Gráfico de Pizza
     ax4 = fig.add_subplot(gs[1, 0])
     max_area = df_clean['area_um2'].max()
@@ -276,6 +330,7 @@ def create_dashboard(df_filtered, img_shape, microns_per_pixel):
         bins = [0, 1.0, 2.0, 5.0, 10.0, 20.0]
         labels = ['<1.0', '1.0-2.0', '2.0-5.0', '5.0-10.0', '>10.0']
     
+    fig4_individual = None
     try:
         df_clean['size_bin'] = pd.cut(df_clean['area_um2'], bins=bins, labels=labels)
         size_dist = df_clean['size_bin'].value_counts().sort_index()
@@ -293,6 +348,20 @@ def create_dashboard(df_filtered, img_shape, microns_per_pixel):
                 autotext.set_color('black')
                 autotext.set_fontweight('bold')
                 autotext.set_fontsize(8)
+            
+            # Criar figura individual
+            fig4_individual = plt.figure(figsize=(8, 8))
+            ax4_ind = fig4_individual.add_subplot(111)
+            wedges_ind, texts_ind, autotexts_ind = ax4_ind.pie(size_dist.values, labels=size_dist.index,
+                                              autopct='%1.1f%%', colors=colors_pie,
+                                              startangle=90, counterclock=False)
+            for autotext in autotexts_ind:
+                autotext.set_color('black')
+                autotext.set_fontweight('bold')
+                autotext.set_fontsize(10)
+            ax4_ind.set_title('DISTRIBUIÇÃO POR TAMANHO', fontsize=14, fontweight='bold')
+            plt.tight_layout()
+            individual_figs['pizza_tamanho'] = fig4_individual
         else:
             ax4.text(0.5, 0.5, 'Sem dados', ha='center', va='center', fontsize=12)
     except Exception as e:
@@ -322,6 +391,27 @@ def create_dashboard(df_filtered, img_shape, microns_per_pixel):
         ax5.text(i+1, mean_val, f'{mean_val:.2f}',
                 ha='center', va='bottom', fontsize=8, fontweight='bold')
     
+    # Criar figura individual
+    fig5_individual = plt.figure(figsize=(8, 6))
+    ax5_ind = fig5_individual.add_subplot(111)
+    bp_ind = ax5_ind.boxplot(data_to_plot, labels=labels_box, patch_artist=True)
+    
+    for patch, color in zip(bp_ind['boxes'], colors_box):
+        patch.set_facecolor(color)
+    
+    ax5_ind.set_title('DISTRIBUIÇÃO DAS MÉTRICAS', fontsize=14, fontweight='bold')
+    ax5_ind.grid(True, alpha=0.3, axis='y')
+    ax5_ind.set_ylabel('Valor', fontsize=12)
+    ax5_ind.tick_params(axis='x', labelsize=11)
+    
+    for i, metric in enumerate(metrics_to_plot):
+        mean_val = df_clean[metric].mean()
+        ax5_ind.text(i+1, mean_val, f'{mean_val:.2f}',
+                ha='center', va='bottom', fontsize=10, fontweight='bold')
+    
+    plt.tight_layout()
+    individual_figs['boxplot_metricas'] = fig5_individual
+    
     # 6. Estatísticas textuais
     ax6 = fig.add_subplot(gs[1, 2])
     ax6.axis('off')
@@ -349,7 +439,7 @@ Razão de aspecto média: {df_clean['aspect_ratio'].mean():.3f} ± {df_clean['as
     plt.suptitle('ANÁLISE COMPLETA DE PARTÍCULAS DE NIÓBIO',
                 fontsize=13, fontweight='bold', y=0.98)
     
-    return fig
+    return fig, individual_figs
 
 # --- LÓGICA PRINCIPAL ---
 uploaded_file = st.file_uploader("Arraste sua imagem aqui...", type=["tif", "png", "jpg"])
@@ -716,10 +806,11 @@ if uploaded_file:
             # DASHBOARD ESTATÍSTICO
             st.markdown("#### 📈 Dashboard Estatístico Completo")
             with st.spinner("Gerando gráficos estatísticos..."):
-                fig_dashboard = create_dashboard(df_filtered, st.session_state.processed_view.shape, microns_per_pixel)
+                fig_dashboard, individual_figs = create_dashboard(df_filtered, st.session_state.processed_view.shape, microns_per_pixel)
             st.pyplot(fig_dashboard)
             
-            # Botões de download para dashboard
+            # Botões de download para dashboard completo
+            st.markdown("**📥 Downloads do Dashboard Completo:**")
             col_download_dash1, col_download_dash2, col_download_dash3 = st.columns(3)
             with col_download_dash1:
                 # Salvar dashboard em PNG 300 DPI
@@ -754,7 +845,78 @@ if uploaded_file:
                                  "image/svg+xml",
                                  use_container_width=True)
             
-            plt.close(fig_dashboard)  # Liberar memória
+            # Downloads individuais das figuras
+            if individual_figs:
+                st.markdown("---")
+                st.markdown("**📊 Downloads de Gráficos Individuais (300 DPI):**")
+                
+                # Organizar em 2 colunas
+                col_ind1, col_ind2 = st.columns(2)
+                
+                # Histograma
+                if 'histograma' in individual_figs:
+                    with col_ind1:
+                        buf_hist = io.BytesIO()
+                        individual_figs['histograma'].savefig(buf_hist, format='png', dpi=300, bbox_inches='tight')
+                        buf_hist.seek(0)
+                        st.download_button("📊 Histograma de Tamanhos",
+                                         buf_hist.getvalue(),
+                                         "grafico_histograma_300dpi.png",
+                                         "image/png",
+                                         use_container_width=True)
+                
+                # Circularidade vs Área
+                if 'circularidade_area' in individual_figs:
+                    with col_ind2:
+                        buf_circ = io.BytesIO()
+                        individual_figs['circularidade_area'].savefig(buf_circ, format='png', dpi=300, bbox_inches='tight')
+                        buf_circ.seek(0)
+                        st.download_button("🔵 Circularidade vs Área",
+                                         buf_circ.getvalue(),
+                                         "grafico_circularidade_area_300dpi.png",
+                                         "image/png",
+                                         use_container_width=True)
+                
+                # Forma vs Tamanho
+                if 'forma_tamanho' in individual_figs:
+                    with col_ind1:
+                        buf_forma = io.BytesIO()
+                        individual_figs['forma_tamanho'].savefig(buf_forma, format='png', dpi=300, bbox_inches='tight')
+                        buf_forma.seek(0)
+                        st.download_button("📐 Forma vs Tamanho",
+                                         buf_forma.getvalue(),
+                                         "grafico_forma_tamanho_300dpi.png",
+                                         "image/png",
+                                         use_container_width=True)
+                
+                # Pizza
+                if 'pizza_tamanho' in individual_figs:
+                    with col_ind2:
+                        buf_pizza = io.BytesIO()
+                        individual_figs['pizza_tamanho'].savefig(buf_pizza, format='png', dpi=300, bbox_inches='tight')
+                        buf_pizza.seek(0)
+                        st.download_button("🍕 Distribuição por Tamanho",
+                                         buf_pizza.getvalue(),
+                                         "grafico_pizza_tamanho_300dpi.png",
+                                         "image/png",
+                                         use_container_width=True)
+                
+                # Boxplot
+                if 'boxplot_metricas' in individual_figs:
+                    with col_ind1:
+                        buf_box = io.BytesIO()
+                        individual_figs['boxplot_metricas'].savefig(buf_box, format='png', dpi=300, bbox_inches='tight')
+                        buf_box.seek(0)
+                        st.download_button("📦 Boxplot das Métricas",
+                                         buf_box.getvalue(),
+                                         "grafico_boxplot_metricas_300dpi.png",
+                                         "image/png",
+                                         use_container_width=True)
+            
+            # Limpar figuras da memória
+            plt.close(fig_dashboard)
+            for fig_ind in individual_figs.values():
+                plt.close(fig_ind)
             
             # TABELA E DOWNLOADS
             st.markdown("---")
